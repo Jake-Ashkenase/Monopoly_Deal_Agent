@@ -4,9 +4,12 @@ import numpy as np
 import random 
 
 '''
-Choosing to use gym for the environment as it is made by OpenAI and is a standard way to represent 
-environments in reinforcement learning.
+Limitations on this representation:
+- No wild properties
+- Only action card is rent
 '''
+
+
 class MonopolyDealEnv(gym.Env):
     def __init__(self):
         super(MonopolyDealEnv, self).__init__()
@@ -49,12 +52,8 @@ class MonopolyDealEnv(gym.Env):
             'Set': 10
         }
 
-        # define the different actions
-        def Rent(self):
-            rent_price = max(self.opponent_board_prop[0]) # need to multiple by the rent prices
-            return rent_price 
 
-        self.cards= {
+        self.deck= {
             {'One_Cash': {'action' : None, 'value' : 1, 'prop_color': None}},
             {'Two_Cash': {'action' : None, 'value' : 2, 'prop_color': None}},
             {'Three_Cash': {'action' : None, 'value' : 3, 'prop_color': None}},
@@ -79,21 +78,29 @@ class MonopolyDealEnv(gym.Env):
             {'Rent': {'action' : Rent, 'value' : 3, 'prop_color': 'Any'}},
         }
 
-
-        self.rent_prices = {
-            'P_Green' : [2, 4, 7],
-            'P_DBlue': [3, 8],
-            'P_Brown': [1, 2],
-            'P_LBlue': [1, 2, 3],
-            'P_Orange': [1, 3, 5],
-            'P_Pink': [1, 2, 4],
-            'P_Black': [1, 2, 3, 4],
-            'P_Red': [2, 3, 6],
-            'P_Tan': [1, 2],
-            'P_Yellow': [2, 4, 6],
-        }
+        # rent reward is 0 if there are no properties played
+        # Once the max number of properties is reached for a color, the rent remains the same as more properties are added
+        self.rent_prices = np.array([
+            [0, 2, 4, 7, 7], # P_Green
+            [0, 3, 8, 8, 8], # P_DBlue
+            [0, 1, 2, 2, 2], # P_Brown
+            [0, 1, 2, 3, 3], # P_LBlue
+            [0, 1, 3, 5, 5], # P_Orange
+            [0, 1, 2, 4, 4], # P_Pink
+            [0, 1, 2, 3, 4], # P_Black
+            [0, 2, 3, 6, 6], # P_Red
+            [0, 1, 2, 2, 2], # P_Tan
+            [0, 2, 4, 6, 6]  # P_Yellow
+        ])
 
         # Define action space s
         self.actions = ['CARD1', 'CARD2', 'CARD3', 'CARD4', 'CARD5', 'CARD6', 'CARD7']
         self.action_space = spaces.Discrete(4) # 4 actions: buy, sell, pass, end turn 
+
+        def Rent(self):
+            '''
+            Calculate the rent for the opponent's properties, then take the max
+            '''
+            rent_options = self.rent_prices[np.arange(10), self.agent_board_prop[:, 0]]
+            return np.max(rent_options)
         
