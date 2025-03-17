@@ -1,4 +1,6 @@
 # Monopoly_Deal_Agent
+By: Roshun Tiwari, Jake Ashkenase, Brady Duncan
+
 A set of algorithms designed to play Monopoly Deal
 
 Algorithms
@@ -11,13 +13,16 @@ Algorithms
 ## Game States
 
 The state of the game is defined by…
-The cards in the agent’s hand (0-7)
-All cards placed on the board by the agent
-All cards placed on the board by the Opponent
+1. The cards in the agent’s hand (0-7)
+2. All cards placed on the board by the agent
+3. All cards placed on the board by the Opponent
 
 ## Inputs: 
 
-Agent’s Hand: [card #1, card #2, … card #n]
+Agent’s Hand: 
+
+[card #1, card #2, … card #n] (max of 7 cards)
+
 Board Representation (One for the agent, one for the opponent) 
 
 Example board:
@@ -35,6 +40,11 @@ Property Yellow: [0, 0, 0]]
 
 Each property vector represents: [# of played properties for the given color (int, 0-4), Is there a house played? (bool, 0 or 1), Is there a hotel played? (bool, 0 or 1)]
 
+Notes / Simplifications on board representation: 
+- since all properties of the same color are of the same value, all properties of the same color can be represented as the same
+- Once a wild property is played from the hand of the agent to the board, it will no longer be represented as wild property, rather a property of the selected color. Therefore it's color cannot change once played
+- rent value can simply be calculated by referncing a representation of rent prices for a given color based on the number of properties, houses, and hotels played. 
+
 ## Outputs:
  
 Each action returns the updated agent’s hand and board state
@@ -45,12 +55,12 @@ The current board representation
 Actions
 
 ## During the Agent Turns:
-Place a card onto the live board 
+- Place a card onto the live board
 Cash 
 Property
 Wild Property 
 House / Hotel
-Play an Action card 
+- Play an Action card 
 Dealbreaker (take a full set from opposing player)
 Debt collector (take 5m from opposing)
 Forced Deal (swap property with opposing player)
@@ -61,7 +71,6 @@ Rent (charge opposing player rent based on agent’s properties)
 
 ## During Payment to other players:
 Choose cards to give to opposing player as payment
-Prioritize cash over properties
 
 ## Rewards (To be used in RL): 
 
