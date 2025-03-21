@@ -14,8 +14,9 @@ class MonopolyDealEnv(gym.Env):
     def __init__(self):
         super(MonopolyDealEnv, self).__init__()
 
-        # define the hand of the agent, a max of 7 cards 
+        # define the hand of the agent and opponent, a max of 7 cards 
         self.agent_hand = []
+        self.opponent_hand = []
 
         # indexing colors for the property board representation
         self.color_to_index = {
@@ -77,13 +78,13 @@ class MonopolyDealEnv(gym.Env):
 
             # leaving out wild properties for the simplest representation of the game
 
-            'Rent': {'action' : rent, 'value' : 3, 'prop_color': 'Any'},
+            'Rent': {'action' : 'rent', 'value' : 3, 'prop_color': 'Any'},
         }
     
 
         # define the quantities of each card in the deck
 
-        self.deck_quantities = np.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+        self.deck_quantities = np.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
 
         # rent reward is 0 if there are no properties played
         # Once the max number of properties is reached for a color, the rent remains the same as more properties are added
@@ -101,7 +102,7 @@ class MonopolyDealEnv(gym.Env):
         ])
 
         # Define action space s
-        self.actions = ['CARD1', 'CARD2', 'CARD3', 'CARD4', 'CARD5', 'CARD6', 'CARD7', 'PASS']
+        # self.actions = ['CARD1', 'CARD2', 'CARD3', 'CARD4', 'CARD5', 'CARD6', 'CARD7', 'PASS']
 
 
         def reset(self):
@@ -109,12 +110,15 @@ class MonopolyDealEnv(gym.Env):
             Reset the game
             '''
             self.agent_hand = []
+            self.opponent_hand = []
             self.agent_board_prop = np.zeros((10, 3))
             self.opponent_board_prop = np.zeros((10, 3))
             self.agent_board_cash = []
             self.opponent_board_cash = []
             self.deck_quantities = np.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0])
-
+            for i in range(7):
+                self.draw_card(True)
+                self.draw_card(False)
             return self.get_observation()
 
 
@@ -130,16 +134,16 @@ class MonopolyDealEnv(gym.Env):
                 'opponent_board_cash': self.opponent_board_cash,
             }
         
-        def num_completed_sets(self):
-            count = sum(1 for a, b in zip(self.agent_board_prop[:, 0], self.color_to_complete_set) if a == b)
+        def num_completed_sets(self, board_prop):
+            count = sum(1 for a, b in zip(board_prop[:, 0], self.color_to_complete_set) if a == b)
             return count
         
 
-        def game_over(self):
+        def game_over(self, board_prop):
             '''
             Check if the game is over
             '''
-            return self.num_completed_sets() >= 3
+            return self.num_completed_sets(board_prop) >= 3
                 
 
         def rent(self):
@@ -150,7 +154,7 @@ class MonopolyDealEnv(gym.Env):
             rent_options = self.rent_prices[np.arange(10), self.agent_board_prop[:, 0]]
             return np.max(rent_options)
         
-        def draw_card(self):
+        def draw_card(self, agent):
             '''
             Draw a card from the deck using weighted random sampling based on quantities.
             Returns the index of the selected card and updates the deck quantities.
@@ -166,52 +170,61 @@ class MonopolyDealEnv(gym.Env):
             self.deck_quantities[selected_idx] -= 1
             card_drawn = cards[selected_idx]
             
-            self.agent_hand.append(card_drawn)
+            self.agent_hand.append(card_drawn) if agent else self.opponent_hand.append(card_drawn)
             return card_drawn
         
-        def step(self, action):
+        def step(self, action, agent=True):
             done = False
             card = self.deck[action]
             reward = 0
-            sets = self.num_completed_sets()
+            sets = self.num_completed_sets(self.agent_board_prop)
             
             self.agent_hand.remove(card)
             if card['action']:
-                rent_value = card['action'](self)
+                rent_value = self.rent()
                 reward += rent_value * 2
             elif card['prop_color']:
-                #property card
+                # property card
                 self.agent_board_prop[self.color_to_index[card['prop_color']], 0] += 1
                 reward += card['value']
             else:
-                #cash card
+                # cash card
                 self.agent_board_cash += card['value']
                 reward += card['value']
 
-            if self.num_completed_sets() > sets:
+            if self.num_completed_sets(self.agent_board_prop) > sets:
                 reward += 10
 
-            #check if the game is over
-            if self.game_over():
+            # check if the game is over
+            if self.game_over(self.agent_board_prop):
                 done = True
                 reward += 100
                 return self.get_observation(), reward, done
+            
+        def step(self, action, agent=False):
+            done = False
+            card = self.deck[action]
+            reward = 0
+            sets = self.num_completed_sets(self.opponent_board_prop)
+            
+            self.opponent_hand.remove(card)
+            if card['action']:
+                rent_value = self.rent()
+                reward += rent_value * 2
+            elif card['prop_color']:
+                # property card
+                self.opponent_board_prop[self.color_to_index[card['prop_color']], 0] += 1
+                reward += card['value']
+            else:
+                # cash card
+                self.opponent_board_cash += card['value']
+                reward += card['value']
 
+            if self.num_completed_sets(self.opponent_board_prop) > sets:
+                reward += 10
 
-
-
-
-
-
-
-
-
-                
-        
-
-
-        
-
-        
-        
-        
+            # check if the game is over
+            if self.game_over(self.opponent_board_prop):
+                done = True
+                reward += 100
+                return self.get_observation(), reward, done
