@@ -45,14 +45,14 @@ class MonopolyDealEnv(gym.Env):
         
         # define the board of the agent, with a vector for each color representing...
         #  [number of properties played, number of houses, number of hotels]
-        self.agent_board_prop = np.zeros((10, 3))  # 11 colors, 3 values each
+        self.agent_board_prop = np.zeros(10)  # 10 colors
         self.agent_board_cash = []
 
 
 
         # define the board of the opponent, with a vector for each color representing...
         #  [number of properties played, number of houses, number of hotels]
-        self.opponent_board_prop = np.zeros((10, 3))  # 11 colors, 3 values each
+        self.opponent_board_prop = np.zeros(10)  # 10 colors
         self.opponent_board_cash = []
 
         self.rewards = {
@@ -89,11 +89,10 @@ class MonopolyDealEnv(gym.Env):
 
             'Rent': {'action' : 'rent', 'value' : 3, 'prop_color': 'Any'},
         }
-    
 
         # define the quantities of each card in the deck
 
-        self.deck_quantities = np.array([6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 2])
+        self.deck_quantities = np.array([6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 5])
 
         # rent reward is 0 if there are no properties played
         # Once the max number of properties is reached for a color, the rent remains the same as more properties are added
@@ -120,11 +119,11 @@ class MonopolyDealEnv(gym.Env):
         '''
         self.agent_hand = []
         self.opponent_hand = []
-        self.agent_board_prop = np.zeros((10, 3))
-        self.opponent_board_prop = np.zeros((10, 3))
+        self.agent_board_prop = np.zeros(10)
+        self.opponent_board_prop = np.zeros(10)
         self.agent_board_cash = np.zeros(6)
         self.opponent_board_cash = np.zeros(6)
-        self.deck_quantities = np.array([6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 0])
+        self.deck_quantities = np.array([6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 5])
         for i in range(7):
             self.draw_card(True)
             self.draw_card(False)
@@ -144,63 +143,97 @@ class MonopolyDealEnv(gym.Env):
         }
     
     def num_completed_sets(self, agent):
-        board_prop = self.agent_board_prop[:, 0] if agent else self.opponent_board_prop[:, 0]
+        board_prop = self.agent_board_prop if agent else self.opponent_board_prop
         count = sum(1 for a, b in zip(board_prop, self.color_to_complete_set) if a == b)
         return count
     
 
     def game_over(self, agent):
         '''
-        Check if the game is over
+        Check if the game is over (Win or Tie)
         '''
-        return self.num_completed_sets(agent) >= 3
+        if len(self.agent_hand) == 0 and len(self.opponent_hand) == 0:
+            return (True, 0)
+        return (True, self.rewards['Goal']) if self.num_completed_sets(agent) >= 3 else (False, 0)
             
 
-    def rent(self):
+    def calculate_rent(self, agent):
         '''
         Calculate the rent for the opponent's properties, then take the max
         '''
 
-        rent_options = self.rent_prices[np.arange(10), self.agent_board_prop[:, 0]]
+        rent_options = self.rent_prices[np.arange(10), self.agent_board_prop.astype(int) if not agent else self.opponent_board_prop.astype(int)]
         return np.max(rent_options)
+    
+    def play_rent_action(self, rent_value, agent):
+        current_rent = 0
+        card_values = np.array([val['value'] for _, val in self.deck.items()])
+        card_values_weighted = np.array([val['value'] * 4 if card.startswith('P_') else val['value'] for card, val in self.deck.items() if val['prop_color'] != 'Any'])
+        while current_rent < rent_value and len(self.agent_hand if not agent else self.opponent_hand) > 0:
+            cash_and_props_on_board_weights = np.append(np.where(self.opponent_board_cash != 0,1,0) if agent else np.where(self.agent_board_cash != 0,1,0), self.opponent_board_prop if agent else self.agent_board_prop)
+            cash_and_props_on_board_weights = np.multiply(cash_and_props_on_board_weights, card_values_weighted)
+            cash_and_props_on_board_weights = np.where(cash_and_props_on_board_weights == 0, np.inf, cash_and_props_on_board_weights)
+            min_index = np.argmin(cash_and_props_on_board_weights)
+            if min_index < len(cash_and_props_on_board_weights) - len(self.color_to_index):
+                card_to_give_up = min_index
+                if agent:
+                    self.opponent_board_cash[card_to_give_up] -= 1
+                    self.agent_board_cash[card_to_give_up] += 1
+                else:
+                    self.agent_board_cash[card_to_give_up] -= 1
+                    self.opponent_board_cash[card_to_give_up] += 1
+            else:
+                card_to_give_up = min_index - (len(cash_and_props_on_board_weights) - len(self.color_to_index))
+                if agent:
+                    self.opponent_board_prop[card_to_give_up] -= 1
+                    self.agent_board_prop[card_to_give_up] += 1
+                else:
+                    self.agent_board_prop[card_to_give_up] -= 1
+                    self.opponent_board_prop[card_to_give_up] += 1
+            current_rent += card_values[min_index]
+        return current_rent
     
     def draw_card(self, agent):
         '''
-        Draw a card from the deck using weighted random sampling based on quantities.
+        Draw a card from the deck using weighted random sampling based on quantities,
+        only if there are cards remaining in the deck.
         Returns the index of the selected card and updates the deck quantities.
         '''
         # get the cards and their weights
-        cards = self.deck.keys()
-        weights = self.deck_quantities / np.sum(self.deck_quantities)
-        # randomly select a card
-        selected_idx = random.choices(range(len(cards)), weights=weights, k=1)[0]
+        if np.sum(self.deck_quantities) > 0:
+            cards = self.deck.keys()
+            weights = self.deck_quantities / np.sum(self.deck_quantities)
+            # randomly select a card
+            selected_idx = random.choices(range(len(cards)), weights=weights, k=1)[0]
 
-        # lower the quantity of the selected card by one 
-        self.deck_quantities[selected_idx] -= 1
-        card_drawn = list(cards)[selected_idx]
-        
-        self.agent_hand.append(card_drawn) if agent else self.opponent_hand.append(card_drawn)
-        return card_drawn
+            # lower the quantity of the selected card by one 
+            self.deck_quantities[selected_idx] -= 1
+            card_drawn = list(cards)[selected_idx]
+            
+            self.agent_hand.append(card_drawn) if agent else self.opponent_hand.append(card_drawn)
+            return card_drawn
     
-    def step(self, action, agent=True, update_state=False):
+    def step(self, action, agent=True):
         done = False
         card = self.deck[action]
         reward = 0
+        rent_value = 0
         sets = self.num_completed_sets(agent)
         if agent:
             self.agent_hand.remove(action)
         else:
             self.opponent_hand.remove(action)
         if card['action']:
-            rent_value = self.rent()
-            reward += card['value']
+            rent_value = self.calculate_rent(agent)
+            rent_received = self.play_rent_action(rent_value, agent)
+            reward += rent_received
         elif card['prop_color']:
             # property card
             if agent:
-                self.agent_board_prop[self.color_to_index[card['prop_color']] - 1, 0] += 1
+                self.agent_board_prop[self.color_to_index[card['prop_color']] - 1] += 1
             else:
-                self.opponent_board_prop[self.color_to_index[card['prop_color']] - 1, 0] += 1
-            reward += card['value']
+                self.opponent_board_prop[self.color_to_index[card['prop_color']] - 1] += 1
+            reward += (2 * card['value'])
         else:
             # cash card
             if agent:
@@ -213,10 +246,11 @@ class MonopolyDealEnv(gym.Env):
             reward += 10
 
         # check if the game is over
-        if self.game_over(agent):
+        game_over, game_over_reward = self.game_over(agent)
+        if game_over:
             done = True
-            reward += 100
-        return self.get_observation(), reward, done
+            reward += game_over_reward
+        return self.get_observation(), reward if agent else -reward, done
         
     def select_random_action(self, agent):
         random_action_index = random.randint(0, len(self.agent_hand if agent else self.opponent_hand) - 1)
@@ -227,13 +261,30 @@ class MonopolyDealEnv(gym.Env):
         bestScore = -10000
         bestAction = None
         for card in (self.agent_hand if agent else self.opponent_hand):
-            self.step(card, 1, agent) # This is changing the global variables. Make copy of board / undo move / idk how to resovle.
+            self.step(card, agent) # This is changing the global variables. Make copy of board / undo move / idk how to resovle.
             # actually i think make a constructor that takes in all the current state variables and move this function into game.py,
             # instantiating a new MonopolyDealEnv() for each minimax play
-            score = self.simulate_minimax
+            score = self.minimax(0, not agent)
             if (score > bestScore):
                 bestScore = score
                 bestAction = card
+        return bestAction
 
-    def simulate_minimax(self, depth, isMaximizing):
-
+    def minimax(self, depth, agent):
+        if self.game_over(agent):
+            return self.rewards['Goal']
+        if agent:
+            bestScore = -10000
+            for card in (self.agent_hand):
+                self.step(card, agent)
+                score = self.minimax(depth+1, not agent)
+                if score > bestScore:
+                    bestScore = score
+        else:
+            bestScore = 10000
+            for card in self.opponent_hand:
+                self.step(card, not agent)
+                score = self.minimax(depth+1, agent)
+                if score < bestScore:
+                    bestScore = score
+        return bestScore
