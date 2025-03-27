@@ -9,6 +9,7 @@ Limitations on this representation:
 - Only action card is rent
 
 MADE SPECIFIC CHANGES TO THE GAME REPRESENTATION TO BE SUITABLE FOR RL
+
 '''
 
 
@@ -31,6 +32,7 @@ class MonopolyDealEnv(gym.Env):
 
             "Agent Cash": spaces.MultiDiscrete([cash_opt, cash_opt, cash_opt, cash_opt, cash_opt, cash_opt]),
             "Opponent Cash": spaces.MultiDiscrete([cash_opt, cash_opt, cash_opt, cash_opt, cash_opt, cash_opt]),
+            'Turn': spaces.Discrete(6)
         })
 
 
@@ -39,7 +41,8 @@ class MonopolyDealEnv(gym.Env):
             "Agent Board": np.zeros(10, dtype=int),  # matches MultiDiscrete([max_prop] * 10)
             "Opponent Board": np.zeros(10, dtype=int),
             "Agent Cash": np.zeros(6, dtype=int),
-            "Opponent Cash": np.zeros(6, dtype=int)
+            "Opponent Cash": np.zeros(6, dtype=int),
+            'Turn': 0
         }
 
         # Maintain the opponent's hand separately since it's not part of observation
@@ -82,27 +85,27 @@ class MonopolyDealEnv(gym.Env):
 
         self.deck = {
             # Cash cards (indices 1-6)
-            1: {'name': 'One_Cash', 'action': None, 'value': 1, 'prop_color': None},
-            2: {'name': 'Two_Cash', 'action': None, 'value': 2, 'prop_color': None},
-            3: {'name': 'Three_Cash', 'action': None, 'value': 3, 'prop_color': None},
-            4: {'name': 'Four_Cash', 'action': None, 'value': 4, 'prop_color': None},
-            5: {'name': 'Five_Cash', 'action': None, 'value': 5, 'prop_color': None},
-            6: {'name': 'Ten_Cash', 'action': None, 'value': 10, 'prop_color': None},
+            0: {'name': 'One_Cash', 'action': None, 'value': 1, 'prop_color': None},
+            1: {'name': 'Two_Cash', 'action': None, 'value': 2, 'prop_color': None},
+            2: {'name': 'Three_Cash', 'action': None, 'value': 3, 'prop_color': None},
+            3: {'name': 'Four_Cash', 'action': None, 'value': 4, 'prop_color': None},
+            4: {'name': 'Five_Cash', 'action': None, 'value': 5, 'prop_color': None},
+            5: {'name': 'Ten_Cash', 'action': None, 'value': 10, 'prop_color': None},
             
             # Property cards (indices 1-10, matching your color_to_index)
-            7: {'name': 'P_Green', 'action': None, 'value': 4, 'prop_color': 'P_Green'},
-            8: {'name': 'P_DBlue', 'action': None, 'value': 4, 'prop_color': 'P_DBlue'},
-            9: {'name': 'P_Brown', 'action': None, 'value': 1, 'prop_color': 'P_Brown'},
-            10: {'name': 'P_LBlue', 'action': None, 'value': 1, 'prop_color': 'P_LBlue'},
-            11: {'name': 'P_Orange', 'action': None, 'value': 2, 'prop_color': 'P_Orange'},
-            12: {'name': 'P_Pink', 'action': None, 'value': 2, 'prop_color': 'P_Pink'},
-            13: {'name': 'P_Black', 'action': None, 'value': 2, 'prop_color': 'P_Black'},
-            14: {'name': 'P_Red', 'action': None, 'value': 3, 'prop_color': 'P_Red'},
-            15: {'name': 'P_Tan', 'action': None, 'value': 2, 'prop_color': 'P_Tan'},
-            16: {'name': 'P_Yellow', 'action': None, 'value': 3, 'prop_color': 'P_Yellow'},
+            6: {'name': 'P_Green', 'action': None, 'value': 4, 'prop_color': 'P_Green'},
+            7: {'name': 'P_DBlue', 'action': None, 'value': 4, 'prop_color': 'P_DBlue'},
+            8: {'name': 'P_Brown', 'action': None, 'value': 1, 'prop_color': 'P_Brown'},
+            9: {'name': 'P_LBlue', 'action': None, 'value': 1, 'prop_color': 'P_LBlue'},
+            10: {'name': 'P_Orange', 'action': None, 'value': 2, 'prop_color': 'P_Orange'},
+            11: {'name': 'P_Pink', 'action': None, 'value': 2, 'prop_color': 'P_Pink'},
+            12: {'name': 'P_Black', 'action': None, 'value': 2, 'prop_color': 'P_Black'},
+            13: {'name': 'P_Red', 'action': None, 'value': 3, 'prop_color': 'P_Red'},
+            14: {'name': 'P_Tan', 'action': None, 'value': 2, 'prop_color': 'P_Tan'},
+            15: {'name': 'P_Yellow', 'action': None, 'value': 3, 'prop_color': 'P_Yellow'},
             
             # Action cards
-            17: {'name': 'Rent', 'action': 'rent', 'value': 3, 'prop_color': 'Any'},
+            16: {'name': 'Rent', 'action': 'rent', 'value': 3, 'prop_color': 'Any'},
         }
     
 
@@ -135,7 +138,8 @@ class MonopolyDealEnv(gym.Env):
             "Agent Board": np.zeros(10, dtype=int),  
             "Opponent Board": np.zeros(10, dtype=int),
             "Agent Cash": np.zeros(6, dtype=int),    
-            "Opponent Cash": np.zeros(6, dtype=int)
+            "Opponent Cash": np.zeros(6, dtype=int),
+            'Turn': 0
         }
         
         # Reset the hidden opponent hand
@@ -145,7 +149,7 @@ class MonopolyDealEnv(gym.Env):
         self.deck_quantities = np.array([6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 2])
         
         # Draw initial hands
-        for _ in range(7):
+        for _ in range(5):
             self.draw_card(True)
             self.draw_card(False)
             
@@ -208,19 +212,37 @@ class MonopolyDealEnv(gym.Env):
     
     
     def step(self, action, agent=True, update_state=False):
+        print(f"stepping with action: {action}")
+        print(self.state["Agent hand"])
         done = False
         card = self.deck[action]
         reward = 0
         sets = self.num_completed_sets(agent)
 
+        #check if a player has any cards to start a turn, if not draw 5
+        hand_to_check = self.state["Agent hand"] if agent else self._opponent_hand
+        if np.all(hand_to_check == 0):
+            self.draw_card(agent)
+            self.draw_card(agent)
+            self.draw_card(agent)
+            self.draw_card(agent)
+            self.draw_card(agent)
+
+        # draw 2 cards to start a turn (every 3 moves)
+        if self.state['Turn'] == 0:
+            self.draw_card(True)
+            self.draw_card(True)
+        elif self.state['Turn'] == 3:
+            self.draw_card(False)
+            self.draw_card(False)
+            
         # Remove card from hand. remove by setting to 0, 
         # drawing a card will fill the slot first (left to right)
+        # the action index is the same as the index of the card in a players hand
         if agent:
-            card_index = np.where(self.state["Agent hand"] == action)[0][0]
-            self.state["Agent hand"][card_index] = 0  
+            self.state["Agent hand"][action] = 0  
         else:
-            card_index = np.where(self._opponent_hand == action)[0][0]
-            self._opponent_hand[card_index] = 0  
+            self._opponent_hand[action] = 0  
 
         # if card is an action card
         if card['action']:
@@ -252,6 +274,23 @@ class MonopolyDealEnv(gym.Env):
             done = True
             reward += 100
 
-        return self.state, reward, done
+        # change the turn
+        if self.state['Turn'] == 5:
+            self.state['Turn'] = 0
+        else: 
+            self.state['Turn'] += 1
+
+        info = {
+        'completed_sets': self.num_completed_sets(agent),
+        'opponent_sets': self.num_completed_sets(not agent),
+        'agent_cash_total': sum(i * count for i, count in enumerate([1,2,3,4,5,10], 1) 
+                              for j in range(self.state["Agent Cash"][i-1])),
+        'opponent_cash_total': sum(i * count for i, count in enumerate([1,2,3,4,5,10], 1) 
+                                 for j in range(self.state["Opponent Cash"][i-1])),
+        'episode_step': getattr(self, '_steps', 0),  # You might want to add a step counter
+        'is_success': done and self.num_completed_sets(agent) >= 3  # True if won by completing sets
+        }
+
+        return self.state, reward, done, info
     
 
