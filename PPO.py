@@ -31,14 +31,17 @@ model.learn(total_timesteps=TOTAL_TIMESTEPS)
 # Save the trained model
 model.save("monopoly_deal_ppo")
 
+print("Model Created!")
+
 # Test the trained agent
-# obs = env.reset()
-# episodes = 10
-# for episode in range(episodes):
-#     done = False
-#     total_reward = 0
-#     while not done:
-#         action, _states = model.predict(obs, deterministic=True)
-#         obs, reward, done, info = env.step(action)
-#         total_reward += reward
-#     print(f"Episode {episode + 1}: Total Reward = {total_reward}")
+obs = env.reset()
+episodes = 10
+for episode in range(episodes):
+    print(f"Episode {episode + 1} of {episodes}")
+    done = False
+    total_reward = 0
+    while not done:
+        action, _states = model.predict(obs, deterministic=True)
+        obs, reward, done, info = env.step(action)
+        total_reward += reward
+    print(f"Episode {episode + 1}: Total Reward = {total_reward}")
