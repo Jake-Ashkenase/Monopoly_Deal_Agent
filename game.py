@@ -1,26 +1,17 @@
-from Game_Representation import *
+from Game_Representation_RL import *
 
 game = MonopolyDealEnv()
-# obs = game.reset()
-# done = False
-# while not done:
-#     for i in range(3):
-#         try:
-#             action = game.select_random_action(agent=True)
-#         except:
-#             continue
-#         obs, reward, done = game.step(action, True)
-#         print(f'Agent: {action}, {reward}')
-#         game.draw_card(True)
-#     for i in range(3):
-#         try:
-#             action = game.select_random_action(agent=False)
-#         except ValueError:
-#             continue
-#         obs, reward, done = game.step(action, False)
-#         print(f'Opponent: {action}, {reward}')
-#         game.draw_card(False)
-# print(game.get_observation())
+for i in range(1000):
+    print(i)
+    obs = game.reset()
+    done = False
+    while not done:
+        obs, reward, done, info = game.step(np.random.randint(0, 10))
+        # print(obs)
+        # print(reward)
+        # print(done)
+
+    print(game.get_observation())
 
 def select_best_action_via_minimax(self, agent):
     bestScore = -10000

@@ -1,7 +1,8 @@
 import gym 
 from gym import spaces 
 import numpy as np 
-import random 
+import random
+import copy
 
 '''
 Limitations on this representation:
@@ -17,13 +18,12 @@ class MonopolyDealEnv(gym.Env):
     def __init__(self):
         super(MonopolyDealEnv, self).__init__()
 
-        prop_opt = 10
-        cash_opt = 6
-        max_prop = 4
-        action_card_opt = 1
+        cash_opt = 7
+        max_prop = 5
         hand_opt = 18
 
         self.action_space = spaces.Discrete(10)
+        self.action_mask = np.ones(10, dtype=bool)
         self.observation_space = spaces.Dict({
             "Agent hand": spaces.MultiDiscrete([hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt]),
 
@@ -32,7 +32,8 @@ class MonopolyDealEnv(gym.Env):
 
             "Agent Cash": spaces.MultiDiscrete([cash_opt, cash_opt, cash_opt, cash_opt, cash_opt, cash_opt]),
             "Opponent Cash": spaces.MultiDiscrete([cash_opt, cash_opt, cash_opt, cash_opt, cash_opt, cash_opt]),
-            'Turn': spaces.Discrete(6)
+            'Turn': spaces.Discrete(6),
+            'action_mask': spaces.Box(low=0, high=1, shape=(10,), dtype=np.int8)
         })
 
 
@@ -73,6 +74,7 @@ class MonopolyDealEnv(gym.Env):
         }
 
         self.color_to_complete_set = np.array([3, 2, 2, 3, 3, 3, 4, 3, 2, 3])
+        # self.color_to_complete_set = np.array([2, 1, 1, 2, 2, 2, 3, 2, 1, 2])
         
         self.rewards = {
             'Goal': 100,  # complete 3 sets 
@@ -148,11 +150,25 @@ class MonopolyDealEnv(gym.Env):
         
         # Reset deck quantities
         self.deck_quantities = np.array([0, 6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 2])
+
+        # draw 5 cards to start the game
+        self.draw_card(True)
+        self.draw_card(True)
+        self.draw_card(True)
+        self.draw_card(True)
+        self.draw_card(True)
+        # opponent draws 5 cards to start the game
+        self.draw_card(False)
+        self.draw_card(False)
+        self.draw_card(False)
+        self.draw_card(False)
+        self.draw_card(False)
+
+        # Update action mask
+        self.action_mask = self.get_action_mask()
+        # Add action mask to state
+        self.state['action_mask'] = self.action_mask.astype(np.int8)
         
-        # Draw initial hands
-        for _ in range(5):
-            self.draw_card(True)
-            self.draw_card(False)
             
         return self.state
 
@@ -164,8 +180,10 @@ class MonopolyDealEnv(gym.Env):
         return self.state
     
     def num_completed_sets(self, agent):
+
         board_prop = self.state["Agent Board"] if agent else self.state["Opponent Board"]
-        count = sum(1 for a, b in zip(board_prop, self.color_to_complete_set) if a == b)
+        count = sum(1 for a, b in zip(board_prop, self.color_to_complete_set) if a >= b)
+
         return count
     
 
@@ -174,6 +192,10 @@ class MonopolyDealEnv(gym.Env):
         Check if the game is over
         '''
         return self.num_completed_sets(agent) >= 3
+    
+    
+    def draw(self):
+        return sum(self.deck_quantities) == 0
             
 
     def rent(self, agent):
@@ -215,47 +237,34 @@ class MonopolyDealEnv(gym.Env):
     
     
     def step(self, action, update_state=False):
-
         agent = self.state['Turn'] < 3
-
-        if not agent:
-            action = np.random.randint(0, 10)
-
         done = False
         reward = 0
         sets = self.num_completed_sets(agent)
 
+        if not agent:
+            # For opponent, only choose from valid actions
+            valid_actions = np.where(self._opponent_hand != 0)[0]
+            if len(valid_actions) > 0:
+                action = np.random.choice(valid_actions)
+            else:
+                action = 0  # Default if no valid actions
+        else:
+            # Check if the action is valid for the agent
+            self.action_mask = self.get_action_mask()
+            if not self.action_mask[action]:
+                # If invalid action, give a negative reward
+                reward -= 10
 
-        #check if a player has any cards to start a turn, if not draw 5
-        hand_to_check = self.state["Agent hand"] if agent else self._opponent_hand
-        if np.all(hand_to_check == 0):
-            self.draw_card(agent)
-            self.draw_card(agent)
-            self.draw_card(agent)
-            self.draw_card(agent)
-            self.draw_card(agent)
-
-        # draw 2 cards to start a turn (every 3 moves)
-        if self.state['Turn'] == 0:
-            self.draw_card(True)
-            self.draw_card(True)
-        elif self.state['Turn'] == 3:
-            self.draw_card(False)
-            self.draw_card(False)
-            
-        # Remove card from hand. remove by setting to 0, 
-        # drawing a card will fill the slot first (left to right)
-        # the action index is the same as the index of the card in a players hand
+        # Get the card that's being played BEFORE removing it from hand
+        card_to_play = self.state["Agent hand"][action] if agent else self._opponent_hand[action]
+        card = self.deck[card_to_play]
+        
+        # Remove card from hand by setting to 0
         if agent:
             self.state["Agent hand"][action] = 0  
         else:
             self._opponent_hand[action] = 0  
-
-
-
-        card_to_play = self.state["Agent hand"][action] if agent else self._opponent_hand[action]
-        card = self.deck[card_to_play]
-
 
         if card['name'] == 'Nothing':
             pass
@@ -270,25 +279,32 @@ class MonopolyDealEnv(gym.Env):
         elif card['prop_color']:
             if agent:
                 self.state["Agent Board"][self.color_to_index[card['prop_color']] - 1] += 1
+                reward += card['value'] * 20
             else:
                 self.state["Opponent Board"][self.color_to_index[card['prop_color']] - 1] += 1
-            reward += card['value']
 
         # if card is a cash card
         else:
             if agent:
                 self.state["Agent Cash"][self.cash_to_index[card['name']] - 1] += 1
+                reward += card['value'] * 10
             else:
                 self.state["Opponent Cash"][self.cash_to_index[card['name']] - 1] += 1
-            reward += card['value']
 
         if self.num_completed_sets(agent) > sets:
-            reward += 10
+            reward += 500
 
         # check if the game is over
         if self.game_over(agent):
             done = True
-            reward += 100
+            reward += 10000
+            if agent:
+                print("Agent wins")
+            else:
+                print("Opponent wins")
+        elif self.draw():
+            done = True
+            print("Draw")
 
         # change the turn
         if self.state['Turn'] == 5:
@@ -320,6 +336,39 @@ class MonopolyDealEnv(gym.Env):
                 self._opponent_hand[9] = 0 
 
 
-        return self.state, reward, done, info
+        #check if a player has any cards at end of turn, if not draw 5
+        hand_to_check = self.state["Agent hand"] if agent else self._opponent_hand
+        if np.all(hand_to_check == 0):
+            self.draw_card(agent)
+            self.draw_card(agent)
+            self.draw_card(agent)
+            self.draw_card(agent)
+            self.draw_card(agent)
+
+        # draw 2 cards to start a turn (every 3 moves)
+        if self.state['Turn'] == 0:
+            self.draw_card(True)
+            self.draw_card(True)
+        elif self.state['Turn'] == 3:
+            self.draw_card(False)
+            self.draw_card(False)
+
+
+        # Update action mask after step
+        self.action_mask = self.get_action_mask()
+        self.state['action_mask'] = self.action_mask.astype(np.int8)
+
+        return self.state, reward if agent else 0, done, info
+    
+    def get_action_mask(self):
+        """
+        Returns a boolean mask indicating which actions are valid.
+        An action is valid if the corresponding index in Agent's hand has a non-zero value.
+        """
+        agent_turn = self.state['Turn'] < 3
+        if agent_turn:
+            return self.state["Agent hand"] != 0
+        else:
+            return self._opponent_hand != 0
     
 
