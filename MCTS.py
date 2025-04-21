@@ -3,16 +3,15 @@ import copy, math, random
 import gym
 from gym import spaces
 import numpy as np
-import random
 
 # Global win condition: complete this many property sets to win.
 WIN_SET_COUNT = 3
 
-'''
+"""
 Limitations on this representation:
 - No wild properties
 - Only action card is rent
-'''
+"""
 
 class MonopolyDealEnv(gym.Env):
     def __init__(self):
@@ -103,6 +102,16 @@ class MonopolyDealEnv(gym.Env):
             [0, 2, 4, 6, 6]   # P_Yellow
         ])
 
+        # Gym API spaces
+        self.action_space = spaces.Discrete(len(self.deck))
+        self.observation_space = spaces.Dict({
+            'agent_hand': spaces.MultiBinary(len(self.deck)),
+            'agent_board_prop': spaces.Box(0, np.inf, shape=(10,), dtype=int),
+            'agent_board_cash': spaces.Box(0, np.inf, shape=(6,), dtype=int),
+            'opponent_board_prop': spaces.Box(0, np.inf, shape=(10,), dtype=int),
+            'opponent_board_cash': spaces.Box(0, np.inf, shape=(6,), dtype=int),
+        })
+
     def reset(self):
         """Reset the game state."""
         self.agent_hand = []
@@ -129,19 +138,14 @@ class MonopolyDealEnv(gym.Env):
     
     def num_completed_sets(self, agent):
         board_prop = self.agent_board_prop if agent else self.opponent_board_prop
-        # A set is complete if the count is at least the required number.
         return sum(1 for a, b in zip(board_prop, self.color_to_complete_set) if a >= b)
     
     def game_over(self, agent):
-        """
-        The game is over only when a player has completed the required number of sets.
-        """
         if self.num_completed_sets(agent) >= WIN_SET_COUNT:
             return (True, self.rewards['Goal'])
         return (False, 0)
-            
+                
     def calculate_rent(self, agent):
-        """Calculate maximum rent available from the opponent's board."""
         rent_options = self.rent_prices[np.arange(10),
             self.agent_board_prop.astype(int) if not agent else self.opponent_board_prop.astype(int)]
         return np.max(rent_options)
@@ -230,7 +234,6 @@ class MonopolyDealEnv(gym.Env):
         return self.get_observation(), reward if agent else -reward, done
 
     def select_random_action(self, agent):
-        """Select a random action from the current hand. Returns None if hand is empty."""
         hand = self.agent_hand if agent else self.opponent_hand
         if not hand:
             return None
@@ -238,38 +241,29 @@ class MonopolyDealEnv(gym.Env):
 
     # --- HEURISTIC ROLLOUT FUNCTION ---
     def heuristic_rollout_move(self, agent_turn):
-        """
-        Instead of choosing a completely random move, this function checks if any property card
-        in hand would complete a set (or bring it closer to completion) and returns that move.
-        Cards with an invalid property color (like Rent cards, with 'Any') are skipped.
-        """
-        # Choose the appropriate hand and board based on agent_turn.
         hand = self.agent_hand if agent_turn else self.opponent_hand
         board = self.agent_board_prop if agent_turn else self.opponent_board_prop
 
-        # First, try to find a property card that would complete a set.
         for move in hand:
             card = self.deck[move]
-            # Only consider cards with a valid property color.
             if card['prop_color'] and card['prop_color'] in self.color_to_index:
                 idx = self.color_to_index[card['prop_color']] - 1
                 if board[idx] + 1 == self.color_to_complete_set[idx]:
                     return move
-        # Otherwise, return a random move.
         return random.choice(hand) if hand else None
 
-    def monte_carlo_tree_search(self, iterations=1000, agent=True, rollout_depth=1):
+    def monte_carlo_tree_search(self, iterations=1000, agent=True, rollout_depth=10, c_param=1.414):
         class MCTSNode:
             def __init__(self, state, parent, move, agent):
-                self.state = state              # Deepcopy of game state.
-                self.parent = parent            # Parent node.
-                self.move = move                # Move leading to this state.
-                self.agent = agent              # Whose turn at this node.
-                self.children = []              # Child nodes.
-                self.wins = 0                   # Accumulated reward.
-                self.visits = 0                 # Visit count.
+                self.state = state
+                self.parent = parent
+                self.move = move
+                self.agent = agent
+                self.children = []
+                self.wins = 0
+                self.visits = 0
                 self.untried_moves = list(state.agent_hand) if agent else list(state.opponent_hand)
-                self.reward = 0                 # Immediate reward from the move.
+                self.reward = 0
 
             def is_terminal(self):
                 done, _ = self.state.game_over(self.agent)
@@ -287,148 +281,146 @@ class MonopolyDealEnv(gym.Env):
                 self.children.append(child_node)
                 return child_node
 
-            def best_child(self, c_param=1.414):
+            def best_child(self, c_param):
                 best_score = -float('inf')
-                best_child_node = None
+                best_child = None
                 for child in self.children:
                     if child.visits == 0:
                         score = float('inf')
                     else:
-                        exploitation = child.wins / child.visits
-                        exploration = c_param * math.sqrt(math.log(self.visits) / child.visits)
-                        score = exploitation + exploration
+                        exploit = child.wins / child.visits
+                        explore = c_param * math.sqrt(math.log(self.visits) / child.visits)
+                        score = exploit + explore
                     if score > best_score:
-                        best_score = score
-                        best_child_node = child
-                return best_child_node
+                        best_score, best_child = score, child
+                return best_child
 
             def update(self, result):
                 self.visits += 1
                 self.wins += result
 
         def rollout(state, current_agent, rollout_depth):
-            simulation_state = copy.deepcopy(state)
+            sim_state = copy.deepcopy(state)
             agent_turn = current_agent
             depth = 0
-            cumulative = 0
+            cum_reward = 0
             while depth < rollout_depth:
-                done, reward = simulation_state.game_over(agent_turn)
+                done, reward = sim_state.game_over(agent_turn)
                 if done:
                     return reward
-                moves = simulation_state.agent_hand if agent_turn else simulation_state.opponent_hand
+                moves = sim_state.agent_hand if agent_turn else sim_state.opponent_hand
                 if not moves:
                     break
-                # Use the heuristic rollout move.
-                move = simulation_state.heuristic_rollout_move(agent_turn)
+                move = sim_state.heuristic_rollout_move(agent_turn)
                 if move is None:
                     break
-                _, r, done = simulation_state.step(move, agent_turn)
-                cumulative += r
+                _, r, done = sim_state.step(move, agent_turn)
+                cum_reward += r
                 if done:
-                    return cumulative
+                    return cum_reward
                 agent_turn = not agent_turn
                 depth += 1
-            return cumulative
+            return cum_reward
 
         root = MCTSNode(copy.deepcopy(self), parent=None, move=None, agent=agent)
         for _ in range(iterations):
             node = root
-            # SELECTION
+            # SELECTION: descend until terminal or a node that still has untried moves
             while not node.is_terminal() and node.is_fully_expanded():
-                next_node = node.best_child()
-                if next_node is None:
+                if not node.children:
+                    # no moves to pick, treat as terminal for MCTS purposes
                     break
-                node = next_node
-            # EXPANSION
+                node = node.best_child(c_param)
+
+            # EXPANSION: only if it isn’t terminal and there are untried moves
             if not node.is_terminal() and not node.is_fully_expanded():
                 node = node.expand()
-            # SIMULATION using heuristic rollout
+
+            # SIMULATION
             result = node.reward + rollout(node.state, node.agent, rollout_depth)
+
             # BACKPROPAGATION
             while node is not None:
                 node.update(result)
-                result = -result  # Flip result for opponent
+                result = -result
                 node = node.parent
+
         if root.children:
-            best_move = max(root.children, key=lambda child: child.visits).move
-        else:
-            best_move = None
-        return best_move
+            return max(root.children, key=lambda c: c.visits).move
+        return None
 
 # --- RUN SIMULATION AND TESTS ---
 
-def run_simulation(num_games=1000, mcts_iterations=100, max_turns=150):
-    agent_wins = 0
-    opponent_wins = 0
-    draws = 0
-    total_simulation_reward = 0  # Track cumulative reward over all games
-    
+def run_simulation(num_games=1000, base_iterations=200, max_turns=150, rollout_depth=None):
+    agent_wins = opponent_wins = draws = 0
+    total_sim_reward = 0
+
     for game in range(num_games):
         env = MonopolyDealEnv()
         env.reset()
+        initial_deck = np.sum(env.deck_quantities)
         done = False
-        agent_turn = True
-        turn_count = 0
-        game_total_reward = 0  # Track reward for the current game
-        
-        while not done and turn_count < max_turns:
-            if agent_turn:
-                action = env.monte_carlo_tree_search(iterations=mcts_iterations, agent=True)
-                if action is None:
+        turn = 0
+        game_reward = 0
+
+        while not done and turn < max_turns:
+            remaining = np.sum(env.deck_quantities)
+            frac = remaining / initial_deck
+            its = max(50, int(base_iterations * frac))
+            # use fixed rollout depth if provided, else dynamic
+            rd = rollout_depth if rollout_depth is not None else (1 + turn // (max_turns // 3))
+            c = 1.0 + (turn / max_turns)
+
+            if turn % 2 == 0:
+                move = env.monte_carlo_tree_search(
+                    iterations=its,
+                    agent=True,
+                    rollout_depth=rd,
+                    c_param=c
+                )
+                if move is None:
                     break
-                _, reward, done = env.step(action, agent=True)
-                game_total_reward += reward
-                while len(env.agent_hand) < 5 and np.sum(env.deck_quantities) > 0:
-                    env.draw_card(True)
+                _, r, done = env.step(move, agent=True)
             else:
-                action = env.select_random_action(agent=False)
-                if action is None:
+                move = env.select_random_action(agent=False)
+                if move is None:
                     break
-                _, reward, done = env.step(action, agent=False)
-                game_total_reward += reward
-                while len(env.opponent_hand) < 5 and np.sum(env.deck_quantities) > 0:
-                    env.draw_card(False)
-            agent_turn = not agent_turn
-            turn_count += 1
-        
-        total_simulation_reward += game_total_reward
-        
-        # Decide the winner based on the complete sets win condition.
-        # If a player reaches WIN_SET_COUNT, they immediately win.
-        # Otherwise, compare the number of complete sets on each board.
+                _, r, done = env.step(move, agent=False)
+
+            game_reward += r
+            while len(env.agent_hand if turn%2==0 else env.opponent_hand) < 5 and np.sum(env.deck_quantities) > 0:
+                env.draw_card(turn%2==0)
+
+            turn += 1
+
+        total_sim_reward += game_reward
+        # Determine winner
         if env.num_completed_sets(True) >= WIN_SET_COUNT:
-            winner = "agent"
-        elif env.num_completed_sets(False) >= WIN_SET_COUNT:
-            winner = "opponent"
-        else:
-            agent_sets = env.num_completed_sets(True)
-            opponent_sets = env.num_completed_sets(False)
-            if agent_sets > opponent_sets:
-                winner = "agent"
-            elif opponent_sets > agent_sets:
-                winner = "opponent"
-            else:
-                winner = "draw"
-        
-        if winner == "agent":
             agent_wins += 1
-        elif winner == "opponent":
+        elif env.num_completed_sets(False) >= WIN_SET_COUNT:
             opponent_wins += 1
         else:
-            draws += 1
-        
+            a_sets = env.num_completed_sets(True)
+            o_sets = env.num_completed_sets(False)
+            if a_sets > o_sets:
+                agent_wins += 1
+            elif o_sets > a_sets:
+                opponent_wins += 1
+            else:
+                draws += 1
+
         if (game + 1) % 100 == 0:
             print(f"Completed {game + 1} games...")
-    
-    total_games = num_games
-    print("\n--- Simulation Results ---")
-    print(f"Total games played: {total_games}")
-    print(f"Agent wins: {agent_wins} ({agent_wins / total_games * 100:.2f}%)")
-    print(f"Opponent wins: {opponent_wins} ({opponent_wins / total_games * 100:.2f}%)")
-    print(f"Draws: {draws} ({draws / total_games * 100:.2f}%)")
-    print(f"Total simulation reward (agent perspective): {total_simulation_reward}")
+
+    print(f"\n--- Simulation Results (rollout depth={rollout_depth if rollout_depth is not None else 'dynamic'}) ---")
+    print(f"Total games played: {num_games}")
+    print(f"Agent wins: {agent_wins} ({agent_wins/num_games*100:.2f}%)")
+    print(f"Opponent wins: {opponent_wins} ({opponent_wins/num_games*100:.2f}%)")
+    print(f"Draws: {draws} ({draws/num_games*100:.2f}%)")
+    print(f"Total simulation reward: {total_sim_reward}")
 
 # --- TESTS ---
+
 def test_heuristic_rollout():
     """
     Test that the heuristic rollout move chooses a property card that would complete a set.
@@ -454,7 +446,6 @@ def test_game_over():
     env = MonopolyDealEnv()
     env.reset()
     # Set three colors to be complete.
-    # For example, for P_Green (requirement 3), set count to 3.
     env.agent_board_prop[0] = 3   # P_Green
     env.agent_board_prop[1] = 2   # P_DBlue (requirement 2)
     env.agent_board_prop[2] = 2   # P_Brown (requirement 2)
@@ -483,12 +474,10 @@ def test_step_cash_card():
     """
     env = MonopolyDealEnv()
     env.reset()
-    # Set hand to contain a cash card.
     env.agent_hand = ['Ten_Cash']
     initial_cash = env.agent_board_cash.copy()
     _, reward, done = env.step('Ten_Cash', agent=True)
     print("Test Step Cash Card: Reward =", reward, "done =", done)
-    # The cash card 'Ten_Cash' adds 10.
     expected_cash = initial_cash.copy()
     expected_cash[env.cash_to_index['Ten_Cash'] - 1] += 1
     assert np.array_equal(env.agent_board_cash, expected_cash), "Agent cash board not updated correctly."
@@ -499,7 +488,6 @@ def test_step_property_card():
     """
     env = MonopolyDealEnv()
     env.reset()
-    # Set hand to contain a property card.
     env.agent_hand = ['P_Brown']
     idx = env.color_to_index['P_Brown'] - 1
     initial_count = env.agent_board_prop[idx]
@@ -510,17 +498,12 @@ def test_step_property_card():
 def test_rent_action():
     """
     Test that playing a rent card returns a positive reward if the opponent has cards.
-    We simulate a scenario where the opponent's board has some properties and hand is non-empty.
     """
     env = MonopolyDealEnv()
     env.reset()
-    # Ensure the opponent has at least one card in hand.
     env.opponent_hand = ['Two_Cash']
-    # Set opponent board with some properties so that rent value is non-zero.
-    # For instance, set opponent's P_DBlue (index 1) to 2.
     idx = env.color_to_index['P_DBlue'] - 1
     env.opponent_board_prop[idx] = 2
-    # Set agent hand to include the Rent card.
     env.agent_hand = ['Rent']
     _, reward, done = env.step('Rent', agent=True)
     print("Test Rent Action: Reward =", reward, "done =", done)
@@ -530,7 +513,7 @@ def test_mcts_property_completion():
     env = MonopolyDealEnv()
     env.reset()
     idx = env.color_to_index['P_DBlue'] - 1
-    env.agent_board_prop[idx] = 1  # Already have one.
+    env.agent_board_prop[idx] = 1
     env.agent_hand = ['P_DBlue', 'Ten_Cash']
     best_move = env.monte_carlo_tree_search(iterations=500, agent=True, rollout_depth=1)
     print("Test 1 - Property Completion: Best move selected:", best_move)
@@ -564,7 +547,13 @@ def run_all_tests():
     test_mcts_cash_card()
     test_mcts_single_move()
     print("All tests passed!")
-
+  
 if __name__ == "__main__":
     run_all_tests()
-    run_simulation(num_games=1000, mcts_iterations=100, max_turns=150)
+    print()
+    # Loop simulations over different rollout depths
+    for rd in [1, 2, 5, 10]:
+        print(f"\n=== Running simulation with rollout depth {rd} ===")
+        run_simulation(num_games=1000, base_iterations=150, max_turns=150, rollout_depth=rd)
+    print("\n=== Running simulation with dynamic rollout depth ===")
+    run_simulation(num_games=1000, base_iterations=150, max_turns=150, rollout_depth=None)
