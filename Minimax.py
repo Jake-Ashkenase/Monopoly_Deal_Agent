@@ -3,7 +3,7 @@ import copy
 from Game_Representation_Minimax import *
 
 class MonopolyDealMinimax:
-    def __init__(self, agent_hand=[], agent_board_prop=np.zeros(10), agent_board_cash=np.zeros(6), opponent_hand=[], opponent_board_prop=np.zeros(10), opponent_board_cash=np.zeros(6), deck_quantities=np.array([]), depth=4):
+    def __init__(self, agent_hand=[], agent_board_prop=np.zeros(10), agent_board_cash=np.zeros(6), opponent_hand=[], opponent_board_prop=np.zeros(10), opponent_board_cash=np.zeros(6), deck_quantities=np.array([]), depth=3):
         self.state = {
         'agent_hand': copy.copy(agent_hand),
         'agent_board_prop': np.copy(agent_board_prop),
@@ -18,7 +18,7 @@ class MonopolyDealMinimax:
     def minimax(self, state, depth, alpha, beta, agent):
         game = MonopolyDealMinimaxEnv(state['agent_hand'], state['agent_board_prop'], state['agent_board_cash'], state['opponent_hand'], state['opponent_board_prop'], state['opponent_board_cash'], state['deck_quantities'])
         if depth == 0 or game.game_over(agent) or game.game_over(not agent) or game.draw():
-            return game.evaluate(not agent), None
+            return game.evaluate(True), None
         
         # agent (True) is maximizing player
         if agent:
