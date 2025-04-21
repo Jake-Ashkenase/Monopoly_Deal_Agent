@@ -7,7 +7,7 @@ import copy
 '''
 Limitations on this representation:
 - No wild properties
-- Only action card is rent
+- Action cards: rent and sly_deal
 
 MADE SPECIFIC CHANGES TO THE GAME REPRESENTATION TO BE SUITABLE FOR RL
 
@@ -20,10 +20,13 @@ class MonopolyDealEnv(gym.Env):
 
         cash_opt = 7
         max_prop = 5
-        hand_opt = 18
+        hand_opt = 19
 
-        self.action_space = spaces.Discrete(10)
-        self.action_mask = np.ones(10, dtype=bool)
+        # Change to MultiDiscrete - first dimension for card selection, second for target selection
+        self.action_space = spaces.MultiDiscrete([10, 10])  # [card index, property to steal]
+        self.card_action_mask = np.ones(10, dtype=bool)
+        self.property_action_mask = np.ones(10, dtype=bool)
+        
         self.observation_space = spaces.Dict({
             "Agent hand": spaces.MultiDiscrete([hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt, hand_opt]),
 
@@ -33,7 +36,8 @@ class MonopolyDealEnv(gym.Env):
             "Agent Cash": spaces.MultiDiscrete([cash_opt, cash_opt, cash_opt, cash_opt, cash_opt, cash_opt]),
             "Opponent Cash": spaces.MultiDiscrete([cash_opt, cash_opt, cash_opt, cash_opt, cash_opt, cash_opt]),
             'Turn': spaces.Discrete(6),
-            'action_mask': spaces.Box(low=0, high=1, shape=(10,), dtype=np.int8)
+            'card_mask': spaces.Box(low=0, high=1, shape=(10,), dtype=np.int8),
+            'property_mask': spaces.Box(low=0, high=1, shape=(10,), dtype=np.int8)
         })
 
 
@@ -74,7 +78,6 @@ class MonopolyDealEnv(gym.Env):
         }
 
         self.color_to_complete_set = np.array([3, 2, 2, 3, 3, 3, 4, 3, 2, 3])
-        # self.color_to_complete_set = np.array([2, 1, 1, 2, 2, 2, 3, 2, 1, 2])
         
         self.rewards = {
             'Goal': 100,  # complete 3 sets 
@@ -109,11 +112,12 @@ class MonopolyDealEnv(gym.Env):
             
             # Action cards
             17: {'name': 'Rent', 'action': 'rent', 'value': 3, 'prop_color': 'Any'},
+            18: {'name': 'Sly_Deal', 'action': 'sly_deal', 'value': 3, 'prop_color': None},
         }
     
 
         # define the quantities of each card in the deck
-        self.deck_quantities = np.array([0, 6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 2])
+        self.deck_quantities = np.array([0, 6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 2, 2])
 
         # rent reward is 0 if there are no properties played
         # Once the max number of properties is reached for a color, the rent remains the same as more properties are added
@@ -149,7 +153,7 @@ class MonopolyDealEnv(gym.Env):
         self._opponent_hand = np.zeros(10, dtype=int)
         
         # Reset deck quantities
-        self.deck_quantities = np.array([0, 6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 2])
+        self.deck_quantities = np.array([0, 6, 5, 3, 3, 2, 1, 3, 2, 2, 3, 3, 3, 4, 3, 2, 3, 2, 2])
 
         # draw 5 cards to start the game
         self.draw_card(True)
@@ -164,10 +168,11 @@ class MonopolyDealEnv(gym.Env):
         self.draw_card(False)
         self.draw_card(False)
 
-        # Update action mask
-        self.action_mask = self.get_action_mask()
-        # Add action mask to state
-        self.state['action_mask'] = self.action_mask.astype(np.int8)
+        # Update action masks
+        self.card_action_mask, self.property_action_mask = self.get_action_masks()
+        # Add action masks to state
+        self.state['card_mask'] = self.card_action_mask.astype(np.int8)
+        self.state['property_mask'] = self.property_action_mask.astype(np.int8)
         
             
         return self.state
@@ -202,9 +207,98 @@ class MonopolyDealEnv(gym.Env):
         '''
         Calculate the rent for the opponent's properties, then take the max
         '''
+        bill_values = [1, 2, 3, 4, 5, 10]
 
+        prop_values = [4, 4, 1, 1, 2, 2, 2, 3, 2, 3]
+
+        # find the needed rent to collect
         rent_options = self.rent_prices[np.arange(10), self.state["Agent Board"]] if agent else self.rent_prices[np.arange(10), self.state["Opponent Board"]]
+        rent_to_collect = np.max(rent_options)
+
+        # find which board to take from
+        board_to_take_from = self.state["Opponent Board"] if agent else self.state["Agent Board"]
+        cash_to_take_from = self.state["Opponent Cash"] if agent else self.state["Agent Cash"]
+
+        # collect cash/properties until the rent is paid
+        money_owed = rent_to_collect
+        while money_owed > 0:
+            cash_values = [bill_values[i] if count > 0 else 0 for i, count in enumerate(cash_to_take_from)] 
+            board_values = [prop_values[i] if count > 0 else 0 for i, count in enumerate(board_to_take_from)]
+
+            options = cash_values + board_values
+
+            # if there is nothing left to pay with, break
+            if max(options) == 0:
+                break
+
+            # Filter out 0 values and find the minimum non-zero option
+            non_zero_options = [x for x in options if x > 0]
+            if not non_zero_options:  # if all options are 0
+                break
+            min_value = min(non_zero_options)
+            min_index = options.index(min_value)
+
+            if min_index < len(cash_values):
+                # Remove from one player's cash and add to other player's cash
+                cash_to_take_from[min_index] -= 1
+                if agent:
+                    self.state["Agent Cash"][min_index] += 1
+                else:
+                    self.state["Opponent Cash"][min_index] += 1
+            else:
+                # Remove from one player's board and add to other player's board
+                board_index = min_index - len(cash_values)
+                board_to_take_from[board_index] -= 1
+                if agent:
+                    self.state["Agent Board"][board_index] += 1
+                else:
+                    self.state["Opponent Board"][board_index] += 1
+
+            money_owed -= min_value
+
+        # update the boards based on the changes 
+        if agent:
+            self.state["Opponent Cash"] = cash_to_take_from
+            self.state["Opponent Board"] = board_to_take_from
+        else:
+            self.state["Agent Cash"] = cash_to_take_from
+            self.state["Agent Board"] = board_to_take_from
+
         return np.max(rent_options)
+    
+    def sly_deal(self, agent, property_idx=None):
+        '''
+        Steal a property from the opponent's board
+        If agent is True, steal from opponent
+        If agent is False, steal from agent
+        property_idx is the index of the property to steal (0-9 corresponding to property colors)
+        '''
+        source_board = "Opponent Board" if agent else "Agent Board"
+        target_board = "Agent Board" if agent else "Opponent Board"
+        
+        # If no property is selected or if there's nothing to steal
+        if property_idx is None:
+            # If no property is specified, handle differently based on who's playing
+            if not agent:  # Opponent's turn
+                # Randomly select a property from agent's board
+                available_props = np.where(self.state["Agent Board"] > 0)[0]
+                if len(available_props) > 0:
+                    property_idx = np.random.choice(available_props)
+                else:
+                    return 0  # No properties to steal
+            else:
+                # Agent didn't specify a property (shouldn't happen due to policy)
+                return 0
+                
+        # Check if there's a property at the selected index
+        if self.state[source_board][property_idx] > 0:
+            # Transfer the property
+            self.state[source_board][property_idx] -= 1
+            self.state[target_board][property_idx] += 1
+            # Return the value of the stolen property
+            return self.deck[7 + property_idx]['value']
+        
+        return 0  # No property was stolen
     
     def draw_card(self, agent):
         '''
@@ -237,49 +331,77 @@ class MonopolyDealEnv(gym.Env):
     
     
     def step(self, action, update_state=False):
+        # Unpack the action into card_idx and property_idx
+        if isinstance(action, (list, tuple, np.ndarray)):
+            card_idx, property_idx = action
+        else:
+            card_idx = action
+            property_idx = None
+            
         agent = self.state['Turn'] < 3
         done = False
         reward = 0
         sets = self.num_completed_sets(agent)
+        game_status = 'Playing'
 
         if not agent:
             # For opponent, only choose from valid actions
             valid_actions = np.where(self._opponent_hand != 0)[0]
             if len(valid_actions) > 0:
-                action = np.random.choice(valid_actions)
+                card_idx = np.random.choice(valid_actions)
             else:
-                action = 0  # Default if no valid actions
+                card_idx = 0  # Default if no valid actions
+                
+            # For sly_deal, choose randomly from agent's properties
+            if self._opponent_hand[card_idx] == 18:  # If sly_deal card
+                valid_properties = np.where(self.state["Agent Board"] > 0)[0]
+                if len(valid_properties) > 0:
+                    property_idx = np.random.choice(valid_properties)
+                else:
+                    property_idx = None  # No properties to steal
         else:
-            # Check if the action is valid for the agent
-            self.action_mask = self.get_action_mask()
-            if not self.action_mask[action]:
-                # If invalid action, give a negative reward
-                reward -= 10
+            # Check if the card action is valid for the agent
+            card_mask, property_mask = self.get_action_masks()
+            if not card_mask[card_idx]:
+                raise ValueError(f"Invalid card action {card_idx} selected. Card mask: {card_mask}")
+            
+
+            # Just check if we're playing sly_deal with no available properties
+            card_to_play = self.state["Agent hand"][card_idx]
+            if card_to_play == 18 and not np.any(property_mask):
+                # No properties to steal, so property_idx doesn't matter
+                property_idx = None
 
         # Get the card that's being played BEFORE removing it from hand
-        card_to_play = self.state["Agent hand"][action] if agent else self._opponent_hand[action]
+        card_to_play = self.state["Agent hand"][card_idx] if agent else self._opponent_hand[card_idx]
         card = self.deck[card_to_play]
         
         # Remove card from hand by setting to 0
         if agent:
-            self.state["Agent hand"][action] = 0  
+            self.state["Agent hand"][card_idx] = 0  
         else:
-            self._opponent_hand[action] = 0  
+            self._opponent_hand[card_idx] = 0  
 
         if card['name'] == 'Nothing':
             pass
 
         # if card is an action card
         elif card['action']:
-            rent_value = self.rent(agent)
-            reward += card['value']
-            # add in RENT FUNCTION HERE AHAHAHAHAHAHAHAHAHAH
+            if card['action'] == 'rent':
+                rent_value = self.rent(agent)
+                reward += rent_value 
+            elif card['action'] == 'sly_deal':
+                stolen_value = self.sly_deal(agent, property_idx)
+                if agent:
+                    reward += stolen_value 
+                else:
+                    reward -= stolen_value   
 
         # if card is a property card
         elif card['prop_color']:
             if agent:
                 self.state["Agent Board"][self.color_to_index[card['prop_color']] - 1] += 1
-                reward += card['value'] * 20
+                reward += card['value'] * 1.5
             else:
                 self.state["Opponent Board"][self.color_to_index[card['prop_color']] - 1] += 1
 
@@ -287,24 +409,25 @@ class MonopolyDealEnv(gym.Env):
         else:
             if agent:
                 self.state["Agent Cash"][self.cash_to_index[card['name']] - 1] += 1
-                reward += card['value'] * 10
+                reward += card['value'] 
             else:
                 self.state["Opponent Cash"][self.cash_to_index[card['name']] - 1] += 1
 
         if self.num_completed_sets(agent) > sets:
-            reward += 500
+            reward += 50
 
         # check if the game is over
         if self.game_over(agent):
             done = True
-            reward += 10000
             if agent:
-                print("Agent wins")
+                game_status = 'Agent wins'
+                reward += 100
             else:
-                print("Opponent wins")
+                game_status = 'Opponent wins'
+                reward -= 100
         elif self.draw():
             done = True
-            print("Draw")
+            game_status = 'Draw'
 
         # change the turn
         if self.state['Turn'] == 5:
@@ -320,7 +443,7 @@ class MonopolyDealEnv(gym.Env):
         'opponent_cash_total': sum(i * count for i, count in enumerate([1,2,3,4,5,10], 1) 
                                  for j in range(self.state["Opponent Cash"][i-1])),
         'episode_step': getattr(self, '_steps', 0),  # You might want to add a step counter
-        'is_success': done and self.num_completed_sets(agent) >= 3  # True if won by completing sets
+        'Game_status': game_status
         }
 
 
@@ -354,21 +477,45 @@ class MonopolyDealEnv(gym.Env):
             self.draw_card(False)
 
 
-        # Update action mask after step
-        self.action_mask = self.get_action_mask()
-        self.state['action_mask'] = self.action_mask.astype(np.int8)
+        # Update action masks after step
+        self.card_action_mask, self.property_action_mask = self.get_action_masks()
+        self.state['card_mask'] = self.card_action_mask.astype(np.int8)
+        self.state['property_mask'] = self.property_action_mask.astype(np.int8)
 
         return self.state, reward if agent else 0, done, info
     
-    def get_action_mask(self):
+    def get_action_masks(self):
         """
-        Returns a boolean mask indicating which actions are valid.
-        An action is valid if the corresponding index in Agent's hand has a non-zero value.
+        Returns two boolean masks:
+        1. card_mask: indicating which cards in hand are valid to play
+        2. property_mask: indicating which properties are valid to steal (only relevant for sly_deal)
         """
         agent_turn = self.state['Turn'] < 3
+        
+        # Card mask - can play any card in hand
         if agent_turn:
-            return self.state["Agent hand"] != 0
+            card_mask = self.state["Agent hand"] != 0
+            
+            # Check if any sly_deal cards in hand
+            sly_deal_indices = np.where(self.state["Agent hand"] == 18)[0]
+            
+            # Property mask - can only steal properties that opponent has
+            # By default, no properties can be stolen
+            property_mask = np.zeros(10, dtype=bool)
+            
+            if len(sly_deal_indices) > 0:
+                # If we have sly_deal, mark properties that can be stolen
+                property_mask = self.state["Opponent Board"] > 0
         else:
-            return self._opponent_hand != 0
+            card_mask = self._opponent_hand != 0
+            
+            # Similar logic for opponent
+            sly_deal_indices = np.where(self._opponent_hand == 18)[0]
+            property_mask = np.zeros(10, dtype=bool)
+            
+            if len(sly_deal_indices) > 0:
+                property_mask = self.state["Agent Board"] > 0
+                
+        return card_mask, property_mask
     
 
